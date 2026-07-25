@@ -283,7 +283,7 @@ def ring_oncall(denials: list) -> None:
     except Exception as exc:  # network, auth, unverified number
         print(f"{RED}   [phone] call failed: {str(exc)[:160]}{RESET}")
         return
-    print(f"{GREEN}   [phone] ringing on-call engineer — call {call_sid[:12]}{RESET}")
+    print(f"{GREEN}   [phone] ringing on-call engineer — call {call_sid}{RESET}")
 
 
 def print_audit(rows: list) -> None:

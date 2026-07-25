@@ -251,6 +251,14 @@ async def handler(ws) -> None:
 
             if msg.get("type") == "ready":
                 bot_id = msg.get("bot_id")
+                # Bots from earlier runs keep their control socket alive and
+                # reconnect here even after remove_bot. Left unchecked they
+                # count toward "everyone is connected" and the script starts
+                # before the current pair has actually joined.
+                if bot_id not in BOT_ROLE:
+                    print(f"[voice] ignoring stale bot {bot_id[:8]} (not in this run)")
+                    await ws.close()
+                    return
                 CONNECTED[bot_id] = ws
                 print(f"[voice] READY  bot={bot_id}  role={BOT_ROLE.get(bot_id, '?')}")
                 asyncio.create_task(_maybe_start_script())
