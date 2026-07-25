@@ -55,10 +55,29 @@ def synthesize_pcm16_48k(text: str, voice: str) -> bytes:
     there is no audio at all.
     """
     try:
-        return _synthesize_openai(text, voice)
+        pcm = _synthesize_openai(text, voice)
     except Exception as exc:
         print(f"[voice] OpenAI TTS unavailable ({type(exc).__name__}), using local voice")
-        return _synthesize_sapi(text, voice)
+        pcm = _synthesize_sapi(text, voice)
+    return _normalize(pcm)
+
+
+def _normalize(pcm_bytes: bytes, target_peak: int = 24000) -> bytes:
+    """Bring every utterance to the same peak level.
+
+    Voices differ in output level by up to 3x (nova is far quieter than onyx),
+    and the local fallback is louder still. Unnormalised, one agent sounds like
+    it is mumbling next to the other, which on a call reads as a bad connection
+    rather than a design choice. target_peak leaves headroom below full scale.
+    """
+    samples = np.frombuffer(pcm_bytes, dtype=np.int16)
+    if samples.size == 0:
+        return pcm_bytes
+    peak = int(np.abs(samples).max())
+    if peak == 0:
+        return pcm_bytes
+    scaled = samples.astype(np.float32) * (target_peak / peak)
+    return np.clip(scaled, -32768, 32767).astype(np.int16).tobytes()
 
 
 def _synthesize_openai(text: str, voice: str) -> bytes:
