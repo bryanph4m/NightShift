@@ -3,6 +3,59 @@
 Things found while doing Phase 2.1 that affect the shared contracts on `main`.
 Not committed to `main` directly -- relay and let Person 1 make the call.
 
+## Proposed contract addition: `target_branch` (optional)
+
+Phase 2.3's scope-check service needs this and it isn't in the proposal
+object contract on `main`. Reasoning:
+
+Branch protection on `main` in both demo repos (required PR review,
+`enforce_admins: true`) blocks a direct commit from **any** identity,
+verified empirically -- even Bob, who has real write access to
+notifications-service, gets a real GitHub 409 ("Changes must be made
+through a pull request") when `github_file_create_update` targets
+`branch: "main"` directly. That's exactly what makes bug 3's "both
+denied" outcome genuine. But it also means bug 1 and bug 2's fixes
+can't land on `main` directly either -- they need a fresh branch off
+`main`'s current HEAD, which only requires ordinary repo push access
+and isn't affected by main's protection.
+
+So the service needs a signal for "this one targets main directly"
+(bug 3) vs "create a feature branch" (bug 1 / bug 2, the default).
+Added `target_branch` as an optional field: omit it and the service
+creates `fix/{bug_id}` from HEAD; set it (e.g. `"main"`) and the
+service commits straight to that branch instead, with no branch-create
+step. Purely additive -- doesn't change the existing required fields.
+
+Verified against real repos, both directions: Bob attempting `bug-3`
+on notifications-service (where he has write) gets `protected_branch`
+(409); Alice attempting the same repo (where she only has read) gets
+`permission_denied` (404) instead -- a different, more mundane failure
+that happens to also be a real denial. To cleanly demonstrate "branch
+protection refuses even the writer" for both repos, test each identity
+against the repo where *they* are the writer (see
+`proposal-bug3-payments-agent-b.json`), not just one repo both ways.
+
+## Error classification, verified against real GitHub responses
+
+ScaleKit's own `http_status` / `tool_error_code` on `ScalekitToolException`
+are uninformative (always 400 / `INTERNAL_ERROR`). The real GitHub status
+lives inside `tool_error_message`, a JSON string: `{"message": ..., "status":
+"<github status>"}`. Parse that, not the outer exception fields.
+
+Confirmed real response shapes (`enforcement/errors.py`):
+- **404 "Not Found"** on a write-oriented call (branch create, file
+  update) from an identity with only read access -- this is GitHub
+  hiding a write-restricted resource behind a 404 rather than a 403.
+  Trustworthy as a genuine permission denial *only* because the service
+  always does a successful read (`github_branch_get`) against the same
+  repo first, so a 404 on the write step can't mean "repo doesn't exist."
+- **409**, message containing "pull request" -- protected branch,
+  distinct from a plain permission denial: the identity can have real
+  write access to the repo and still be refused here.
+- **422** on `github_file_create_update` missing `sha` -- not a
+  permission signal at all, just a missing-field error on updates to an
+  existing file (omit `sha` only for genuinely new files).
+
 ## Contract drift: GitHub connection name
 
 `main`'s README documents `SCALEKIT_GITHUB_CONNECTION_NAME=github`. The actual

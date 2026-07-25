@@ -18,6 +18,11 @@ ALICE_IDENTIFIER = os.environ.get("ALICE_IDENTIFIER", "alice")
 # without a code change.
 GITHUB_CONNECTION_NAME = os.environ.get("SCALEKIT_GITHUB_CONNECTION_NAME", "github-98UjwezY")
 
+# Owner of the two demo repos (payments-service, notifications-service).
+# Deliberately neither Alice's nor Bob's account -- an owner bypasses
+# collaborator permission restrictions, which would break the premise.
+GITHUB_ORG_OR_OWNER = os.environ.get("GITHUB_ORG_OR_OWNER", "bryanph4m")
+
 
 def get_scalekit_client() -> ScalekitClient:
     return ScalekitClient(

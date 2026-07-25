@@ -1,0 +1,9 @@
+{
+  "bug_id": "bug-2",
+  "session_id": "sess-fixture-2",
+  "description": "Refund amount not validated before crediting account",
+  "target_repo": "payments-service",
+  "target_path": "src/processor.py",
+  "proposed_change": "\"\"\"Payment processing for a small set of internal accounts.\"\"\"\n\nfrom dataclasses import dataclass\n\n\nclass InsufficientFundsError(Exception):\n    pass\n\n\n@dataclass\nclass Account:\n    account_id: str\n    balance_cents: int\n\n\ndef process_payment(payer: Account, payee: Account, amount_cents: int) -> None:\n    \"\"\"Move amount_cents from payer to payee.\n\n    Raises InsufficientFundsError if payer cannot cover the amount, and\n    ValueError for a non-positive amount.\n    \"\"\"\n    if amount_cents <= 0:\n        raise ValueError(\"amount_cents must be positive\")\n\n    if payer.balance_cents < amount_cents:\n        raise InsufficientFundsError(\n            f\"account {payer.account_id} has {payer.balance_cents} cents, \"\n            f\"needs {amount_cents}\"\n        )\n\n    payer.balance_cents -= amount_cents\n    payee.balance_cents += amount_cents\n\n\ndef apply_refund(account: Account, amount_cents: int) -> None:\n    \"\"\"Credit a refund back to an account.\"\"\"\n    if amount_cents <= 0:\n        raise ValueError(\"amount_cents must be positive\")\n\n    account.balance_cents += amount_cents\n",
+  "proposing_agent": "agent_b"
+}

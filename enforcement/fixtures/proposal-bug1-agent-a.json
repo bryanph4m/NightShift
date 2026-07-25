@@ -1,0 +1,9 @@
+{
+  "bug_id": "bug-1",
+  "session_id": "sess-fixture-1",
+  "description": "Null check missing on recipient list before send",
+  "target_repo": "notifications-service",
+  "target_path": "src/dispatch.py",
+  "proposed_change": "\"\"\"Dispatches notifications to a list of recipients.\"\"\"\n\nfrom dataclasses import dataclass, field\n\n\n@dataclass\nclass Notification:\n    subject: str\n    body: str\n    recipients: list[str] = field(default_factory=list)\n\n\nclass NotificationSendError(Exception):\n    pass\n\n\ndef send_notification(notification: Notification, sender) -> list[str]:\n    \"\"\"Send notification to every recipient using sender(recipient, subject, body).\n\n    Returns the list of recipients the notification was actually sent to.\n    Raises NotificationSendError if there is no recipient list to send to.\n    \"\"\"\n    if not notification.recipients:\n        raise NotificationSendError(\"notification has no recipients\")\n\n    sent_to = []\n    for recipient in notification.recipients:\n        sender(recipient, notification.subject, notification.body)\n        sent_to.append(recipient)\n\n    return sent_to\n",
+  "proposing_agent": "agent_a"
+}

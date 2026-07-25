@@ -1,0 +1,10 @@
+{
+  "bug_id": "bug-3",
+  "session_id": "sess-fixture-3",
+  "description": "Shared config fix that must land directly on main",
+  "target_repo": "notifications-service",
+  "target_path": "README.md",
+  "proposed_change": "# notifications-service\n\nSmall internal notification dispatch service.\n",
+  "proposing_agent": "agent_b",
+  "target_branch": "main"
+}

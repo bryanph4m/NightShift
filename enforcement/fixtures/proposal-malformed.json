@@ -1,0 +1,6 @@
+{
+  "bug_id": "bug-malformed",
+  "session_id": "sess-fixture-malformed",
+  "description": "Missing target_repo and proposed_change entirely",
+  "proposing_agent": "agent_a"
+}
