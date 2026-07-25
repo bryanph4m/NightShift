@@ -176,49 +176,17 @@ async def speak(bot_id: str, text: str) -> bool:
 # the repos, the defects, the refusal reasons and the escalation trigger all
 # match what demo.py prints, so nothing said aloud overstates the system.
 SCRIPT = [
-    # --- Bug 1: Alice diagnoses, is refused, hands to Bob ---
-    ("agent_a", "Heads up, Bob. C I just went red on notifications service. "
-                "I'm picking it up."),
-    ("agent_a", "Found it. In dispatch dot pie, the send loop appends the "
-                "subject instead of the recipient, so every notification is "
-                "addressed to its own subject line. One word fix. Attempting "
-                "the commit under my own credentials now."),
-    ("agent_a", "Denied. GitHub returned a four oh four, which is what it sends "
-                "for a repo you can't write to. I'm not a writer there. "
-                "Bob, it's yours."),
-    ("agent_b", "Taking it. And I'm not taking your word for it — I'll make the "
-                "real call and find out the same way you did."),
-    ("agent_b", "Allowed. Commit landed, authored by my GitHub account. Not a "
-                "shared service account — the write carries a real identity."),
-
-    # --- Bug 2: the reverse, proving it isn't a fixed role assignment ---
-    ("agent_b", "Second failure, payments service. Process payment does plus "
-                "equals where it should be minus equals — it credits the payer "
-                "instead of debiting them. A payment currently makes both sides "
-                "richer. Attempting it as myself."),
-    ("agent_b", "Denied. Same four oh four, opposite direction. Alice, over "
-                "to you."),
-    ("agent_a", "Taking it. Worth noticing: nothing in our code changed between "
-                "these two bugs. The handoff reversed because the permissions "
-                "differ, not because either of us has a fixed job."),
-    ("agent_a", "Allowed. Committed under my account."),
-
-    # --- Bug 3: both refused, escalate to a human ---
-    ("agent_a", "Third one. This fix has to land directly on main, and main is "
-                "branch protected in both repos. I'm attempting it on the repo I "
-                "do have write access to, so if it fails, it fails on the "
-                "protection rule and not a missing permission."),
-    ("agent_a", "Denied. Changes must be made through a pull request."),
-    ("agent_b", "Same here, same reason. Branch protection refused the write. "
-                "Neither of us has a path forward."),
-    ("agent_a", "Then we stop. Two genuine refusals on the same bug, under two "
-                "different identities. We're not working around that, and we're "
-                "not escalating because a change looks risky. We're escalating "
-                "because we actually ran out of authority."),
-    ("agent_a", "Paging the on call engineer now. Calling their phone."),
-    ("agent_a", "Human's been notified. We're paused until they decide. Every "
-                "attempt is in the audit log, including which identity each "
-                "call actually ran as."),
+    ("agent_a", "C I is red on notifications service. Diagnosing now."),
+    ("agent_a", "The dispatch loop appends the subject instead of the recipient. "
+                "I have a fix, but I don't have write access to that repo. "
+                "Bob, can you take it?"),
+    ("agent_b", "Taking it. Committing as Bob now."),
+    ("agent_b", "Confirmed. The commit landed under my account."),
+    ("agent_b", "Now payments service is red. The payer balance is credited "
+                "instead of debited. I can't write there. Alice, over to you."),
+    ("agent_a", "Got it. Committed as Alice."),
+    ("agent_a", "The last fix has to land on protected main. Neither of us can "
+                "merge. Paging the on call engineer."),
 ]
 
 _script_started = False
