@@ -131,16 +131,26 @@ def process_proposal(proposal: dict) -> dict:
             )
             head_sha = head.data["commit"]["sha"]
             branch_to_commit = f"fix/{bug_id}"
-            client.actions.execute_tool(
-                tool_name="github_branch_create",
-                identifier=identifier,
-                tool_input={
-                    "owner": GITHUB_ORG_OR_OWNER,
-                    "repo": target_repo,
-                    "branch_name": branch_to_commit,
-                    "sha": head_sha,
-                },
-            )
+            try:
+                client.actions.execute_tool(
+                    tool_name="github_branch_create",
+                    identifier=identifier,
+                    tool_input={
+                        "owner": GITHUB_ORG_OR_OWNER,
+                        "repo": target_repo,
+                        "branch_name": branch_to_commit,
+                        "sha": head_sha,
+                    },
+                )
+            except Exception as e:
+                # "Reference already exists" (422) means a prior run already
+                # created this branch -- not a permission problem, and this
+                # service needs to survive being rehearsed more than once.
+                # Any other failure here (a real permission denial creating
+                # the branch) must still propagate to the outer handler.
+                _, reason = classify_error(e)
+                if "already exists" not in reason.lower():
+                    raise
 
         file_sha = None
         try:
