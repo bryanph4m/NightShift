@@ -36,7 +36,16 @@ def dispatch(bot_name: str) -> str | None:
 
 
 if __name__ == "__main__":
-    ids = {"agent_a": dispatch("Agent Alice"), "agent_b": dispatch("Agent Bob")}
+    # Dispatch both concurrently. Sequentially, the second create_bot call only
+    # goes out after the first returns, so one agent reaches the waiting room
+    # noticeably ahead of the other and they arrive as two separate events.
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        alice = pool.submit(dispatch, "Agent Alice")
+        bob = pool.submit(dispatch, "Agent Bob")
+        ids = {"agent_a": alice.result(), "agent_b": bob.result()}
+
     with open("voice_bots.json", "w") as fh:
         json.dump(ids, fh)
     print(json.dumps(ids))

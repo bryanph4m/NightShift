@@ -286,7 +286,11 @@ def load_roles() -> None:
 
 async def main() -> None:
     load_roles()
-    async with websockets.serve(handler, "0.0.0.0", PORT, ping_interval=20):
+    # Keepalive pings are disabled deliberately. MeetStream's bot does not
+    # answer them, so with pings on, a bot that sits quiet while the other
+    # agent speaks gets dropped as dead mid-script — it stays InMeeting but
+    # its control socket is gone, and its later turns go nowhere.
+    async with websockets.serve(handler, "0.0.0.0", PORT, ping_interval=None):
         print(f"[voice] control server listening on :{PORT}")
         await asyncio.Future()
 
