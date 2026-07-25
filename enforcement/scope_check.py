@@ -130,7 +130,13 @@ def process_proposal(proposal: dict) -> dict:
                 tool_input={"owner": GITHUB_ORG_OR_OWNER, "repo": target_repo, "branch": "main"},
             )
             head_sha = head.data["commit"]["sha"]
-            branch_to_commit = f"fix/{bug_id}"
+            # Session-scoped, so every run branches from main's *current* HEAD.
+            # With a bare fix/{bug_id}, a rerun hits the idempotent
+            # "already exists" path below and commits onto the branch an
+            # earlier run created -- which was cut before the demo bugs were
+            # planted on main. The commit is real either way, but its diff
+            # reads against code that was never broken.
+            branch_to_commit = f"fix/{bug_id}-{session_id}" if session_id else f"fix/{bug_id}"
             try:
                 client.actions.execute_tool(
                     tool_name="github_branch_create",
