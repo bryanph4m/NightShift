@@ -1,0 +1,28 @@
+{
+  "fetched_at": "2026-07-25T21:49:11.792155+00:00",
+  "owner": "bryanph4m",
+  "repos": [
+    "payments-service",
+    "notifications-service"
+  ],
+  "principals": {
+    "agent_a": {
+      "agent_id": "agent_a",
+      "identifier": "alice",
+      "repos": {
+        "payments-service": "write",
+        "notifications-service": "read"
+      },
+      "github_login": "Yba1"
+    },
+    "agent_b": {
+      "agent_id": "agent_b",
+      "identifier": "bob",
+      "repos": {
+        "payments-service": "read",
+        "notifications-service": "write"
+      },
+      "github_login": "ybalrs2-lab"
+    }
+  }
+}
