@@ -8,3 +8,7 @@ venv/
 *.db
 *.sqlite3
 enforcement/scripts/verify_output/
+
+# Standalone demo repos (payments-service, notifications-service) -- each is
+# its own separate git repo pushed straight to GitHub, not part of this one.
+demo-repos/

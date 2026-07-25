@@ -52,6 +52,52 @@ all five match exactly, including required input fields:
 
 No drift here -- safe to build Phase 2.3 against these as documented.
 
+## Demo repos created
+
+`payments-service` and `notifications-service` now exist under `bryanph4m`
+(neither Alice's nor Bob's account, so no owner-bypass risk), each with a
+small real Python codebase + pytest suite + passing CI, per main's Setup
+section:
+
+- https://github.com/bryanph4m/payments-service
+- https://github.com/bryanph4m/notifications-service
+
+Branch protection on `main` in both: 1 required approving review,
+`enforce_admins: true` (blocks the owner too, not just Alice/Bob), no
+restrictions. Verified via the API, not just the create call.
+
+Collaborator permissions, verified live:
+
+| | payments-service | notifications-service |
+|---|---|---|
+| Alice (`Yba1`) | write | read |
+| Bob (`ybalrs2-lab`) | read | write |
+
+Both are read (not zero-access) on the repo they can't write to, so the
+diagnosing agent can still fetch file contents there. Invitations were
+accepted programmatically using each identity's own ScaleKit-connected
+GitHub token via `actions.request()` (the generic authenticated-proxy
+method) with `PATCH /user/repository_invitations/{id}` -- there's no
+dedicated accept-invitation tool in the connector's 112-tool catalog, so
+this needed the escape hatch rather than a prebuilt tool.
+
+Still needed from Person 1: the `workflow_run` webhook isn't wired up yet
+(needs their `PUBLIC_WEBHOOK_BASE_URL`), and the three demo bugs haven't
+been planted. Both repos currently pass CI cleanly.
+
+## Bot B verified live in the real Meet call
+
+Created against the real shared link (`https://meet.google.com/hnh-wkmi-btq`),
+reached `InMeeting` after being admitted, and `send_message` was confirmed
+visually in the meeting chat.
+
+`get_chats` returned `"Manifest is still being processed"` immediately after
+a `send_message` call -- **not reliable for real-time confirmation.** Don't
+build the Phase 2.2 attribution check (or anything else) around polling
+`get_chats` right after posting; use the live transcript webhook or visual
+confirmation instead, and only treat `get_chats` as authoritative after some
+delay or after the meeting ends.
+
 ## A third connected account exists
 
 `list_connected_accounts()` also returned a third entry, identifier
