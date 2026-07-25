@@ -35,17 +35,30 @@ The full phase card for this workstream is in [`BUILD.md`](BUILD.md).
 
 You need from their Phase 1.1: the GitHub connection name, `client_id`, `client_secret`, and the environment URL.
 
-1. Initialise the SDK. **Env var naming is settled on `main`: `SCALEKIT_ENVIRONMENT_URL`,** matching `ScalekitClient(environment_url=...)`. Older ScaleKit samples use `SCALEKIT_ENV_URL` for the same value — do not use that spelling.
+1. Initialise the SDK. **Env var naming is `SCALEKIT_ENVIRONMENT_URL`** for our own `.env` — but the installed SDK's actual constructor (`scalekit-sdk-python` 2.15.0) takes the keyword argument **`env_url`**, not `environment_url`. Pass `ScalekitClient(env_url=os.environ["SCALEKIT_ENVIRONMENT_URL"], client_id=..., client_secret=...)` — settled on `main`, the env var name and the constructor kwarg name are different strings, don't conflate them.
 2. `scalekit.actions.get_or_create_connected_account(connection_name="github", identifier="bob")` against **the same connection** Person 1 created. If `response.connected_account.status != "ACTIVE"`, call `get_authorization_link(...)` and complete the OAuth flow in a browser against **Bob's real, separate GitHub account**.
-3. Verify with `scalekit.tools.list_scoped_tools(identifier="bob", filter={"connection_names": ["github"]})`. Note that `list_scoped_tools` is on `scalekit.tools`, while `get_or_create_connected_account`, `get_authorization_link`, and `execute_tool` are on `scalekit.actions`.
-4. **Compare against Alice's.** They must genuinely differ. Print both side by side and read them.
-5. Document both identifiers on `main`. Every call in your scope-check service depends on passing the correct one, and **passing the wrong identifier silently produces a wrong-but-plausible result** — the worst kind of bug to have in this system.
+3. **Verify Bob and Alice are genuinely different — but not with `list_scoped_tools()`.** Tested against the live environment: it returns an identical tool-name list for both, because it reflects the GitHub connector's static catalog (which API operations exist), not the connected user's actual repo permissions. The reliable check calls a tool and reads back who GitHub says you are:
+
+   ```python
+   for who in ("alice", "bob"):
+       result = scalekit.actions.execute_tool(
+           tool_name="github_user_get_authenticated",
+           identifier=who,
+           tool_input={},
+       )
+       print(who, "->", result.data.get("login"))
+   ```
+
+   Print both logins side by side. If they match, the OAuth flows were completed as the same GitHub user — redo step 2 in a separate browser profile before going further.
+4. Document both identifiers on `main`. Every call in your scope-check service depends on passing the correct one, and **passing the wrong identifier silently produces a wrong-but-plausible result** — the worst kind of bug to have in this system.
 
 > **Use a separate browser profile or a private window for Bob's OAuth flow.** Completing it while still signed in as Alice is the easiest way to end up with two identical principals and a demo that proves nothing.
 
-**⚠ Mandatory sync point with Person 1.** Confirm together that Alice and Bob resolve to different scoped results. **If this does not hold, nothing downstream is real. Do not proceed past it.**
+**⚠ Mandatory sync point with Person 1.** Confirm together that Alice and Bob resolve to genuinely different real GitHub logins via the `execute_tool` check above (not `list_scoped_tools()` — see step 3). **If this does not hold, nothing downstream is real. Do not proceed past it.**
 
-**Commit:** Bob's connected-account setup script and an identity-verification utility printing both principals' scoped tools side by side. **Keep that utility** — you will want it during rehearsal.
+✅ **Already verified this session:** `bob` → `ybalrs2-lab`, `alice` → `Yba1` — two distinct, real GitHub accounts. Re-run `enforcement/scripts/verify_identities.py` during rehearsal to reconfirm this still holds.
+
+**Commit:** Bob's connected-account setup script and an identity-verification utility printing both principals' logins side by side. **Keep that utility** — you will want it during rehearsal.
 
 ### 2.2 — Bot B and the posting layer · ~1.5 hr
 
@@ -87,7 +100,7 @@ This signature is a **shared contract**; canonical copy on `main`. Both agents p
 
    Fetching current file contents first uses `github_file_contents_get`, which returns Base64 for files.
 
-   > **Confirm every tool name against the live connector docs and `list_scoped_tools()` for your identifier before building on it.** The names above were correct at the time of writing, but connector catalogues change, and **a wrong tool name produces an error that closely resembles a permission denial.** That will send you debugging the wrong hypothesis and cost you real time.
+   > **Confirm every tool name against the live connector docs and `list_scoped_tools()` for your identifier before building on it.** The names above were correct at the time of writing (and confirmed this session against a live response — see `enforcement/HANDOFF.md`), but connector catalogues change, and **a wrong tool name produces an error that closely resembles a permission denial.** That will send you debugging the wrong hypothesis and cost you real time.
 
 3. **⚠ Let the call genuinely succeed or fail on the real OAuth scope.** Do not pre-check permissions in your own code and skip the ScaleKit call. Do not maintain a table of who owns which repo. The entire demo rests on the real per-user token being the thing that fails. **If a judge asks to see the code, this is the line they will look at.**
 4. Catch the failure and translate it into a readable `reason`. **Classify the error type** — genuine permission denial vs. network vs. malformed input vs. wrong tool name — because during the demo you need to know instantly which one you are looking at.
@@ -262,9 +275,9 @@ CREATE TABLE audit_log (
 
 ### ⚠ The mandatory sync point
 
-Before anything downstream is real, both of you must independently run `list_scoped_tools()` for your own principal and confirm **Alice and Bob resolve to genuinely different scoped tool sets.** Print them side by side and read them.
+Before anything downstream is real, both of you must independently confirm **Alice and Bob resolve to genuinely different real GitHub accounts.** `list_scoped_tools()` cannot be used for this — tested live, it returns an identical tool-name list for both, since it reflects the connector's static catalog rather than per-user permissions. Instead run `execute_tool(tool_name="github_user_get_authenticated", identifier=who, tool_input={})` for each principal and compare the `login` field in the response, side by side.
 
-If they are identical, both OAuth flows were completed as the same GitHub user — most likely because Bob's was done in a browser still signed in as Alice. Redo it in a separate profile or private window. Do not build past this point until they differ.
+If the logins match, both OAuth flows were completed as the same GitHub user — most likely because Bob's was done in a browser still signed in as Alice. Redo it in a separate profile or private window. Do not build past this point until they differ. **Confirmed this session: `bob` → `ybalrs2-lab`, `alice` → `Yba1`.**
 
 ### ⚠ Open question: which channel do the agents actually talk on?
 
@@ -310,7 +323,7 @@ This exercises the real ScaleKit call, the real GitHub permission boundary, and 
 
 Everything below must pass before integration.
 
-**Two principals differ.** `list_scoped_tools()` for Alice and Bob, side by side, genuinely different. See the mandatory sync point above. Nothing else on this list means anything until this passes.
+**Two principals differ.** `execute_tool(tool_name="github_user_get_authenticated", ...)` for Alice and Bob returns two different real GitHub logins, side by side. (Not `list_scoped_tools()` — confirmed live that it returns an identical tool list for both regardless of identity, since it reflects the connector's static catalog.) See the mandatory sync point above. Nothing else on this list means anything until this passes.
 
 **Two bots on one call produce correctly distinguished speaker labels.** Get Bot A and Bot B into the same real Meet call with Person 1, have each post, and confirm the messages come back attributed to the right bot with unambiguous labels. **This is the single riskiest verification in the build** and its failure mode is silent: ambiguous labels do not error, they just cause proposals to be assigned to the wrong agent, and the permission story quietly stops being true.
 
@@ -342,6 +355,6 @@ Everything below must pass before integration.
 
 **ScaleKit tool name mismatches.** These produce errors that resemble permission failures. **Verify tool names against the live docs and via `list_scoped_tools()` before assuming a denial is a denial.** Your error classification in Phase 2.3 step 4 exists specifically so you can tell these apart under time pressure.
 
-**Contract drift.** You consume the proposal object and produce the decision object. If Person 1 changes the proposal shape without updating `main`, your service breaks in a way that **looks like a permission bug.** Pull `main` regularly and re-read the contracts section when you do.
+**Contract drift.** You consume the proposal object and produce the decision object. If Person 1 changes the proposal shape without updating `main`, your service breaks in a way that **looks like a permission bug.** Pull `main` regularly and re-read the contracts section when you do. See `enforcement/HANDOFF.md` for a live example: the GitHub connection name documented on `main` (`github`) does not match the actual connection in the shared environment (`github-98UjwezY`) — flagged, not yet resolved.
 
 **AI attribution leaking into demo commits.** Your service authors the commits that are the demo's primary evidence. They must read as ordinary human work by the engineer whose identity executed them. Check the commit-message construction in Phase 2.3 step 6 and verify it on a real commit before demo day.
