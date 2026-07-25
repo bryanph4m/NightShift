@@ -176,7 +176,8 @@ async def speak(bot_id: str, text: str) -> bool:
 # the repos, the defects, the refusal reasons and the escalation trigger all
 # match what demo.py prints, so nothing said aloud overstates the system.
 SCRIPT = [
-    ("agent_a", "C I is red on notifications service. Diagnosing now."),
+    ("agent_a", "Bob, we have a problem. C I just went red on notifications "
+                "service. Diagnosing now."),
     ("agent_a", "The dispatch loop appends the subject instead of the recipient. "
                 "I have a fix, but I don't have write access to that repo. "
                 "Bob, can you take it?"),
