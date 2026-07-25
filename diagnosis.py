@@ -124,6 +124,27 @@ def strip_code_fences(text: str) -> str:
     return cleaned.strip()
 
 
+def strip_source_fences(source: str) -> str:
+    """Strip markdown fences wrapping a file body inside a JSON string value.
+
+    Distinct from strip_code_fences, which unwraps the model's whole response.
+    This one guards the ``proposed_change`` payload, which is committed verbatim
+    — a leftover ``` makes the file invalid and turns the fix into a new failure.
+    """
+    if not source:
+        return source
+    text = source.strip("\n")
+    lines = text.split("\n")
+    if lines and lines[0].lstrip().startswith("```"):
+        lines = lines[1:]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if lines and lines[-1].strip().startswith("```"):
+        lines.pop()
+    cleaned = "\n".join(lines)
+    return cleaned + "\n" if cleaned and not cleaned.endswith("\n") else cleaned
+
+
 def guess_target_path(ci_output: str, repo: str) -> str:
     """Pull the most plausible source path out of the CI output."""
     short = _short_repo(repo)
@@ -193,6 +214,52 @@ def validate_proposal(proposal: Dict[str, Any]) -> Dict[str, Any]:
             f"{proposal['proposing_agent']!r}"
         )
     return proposal
+
+
+def _call_openai(system_prompt: str, user_prompt: str) -> str:
+    """OpenAI fallback for the diagnosis step.
+
+    Diagnosis is the one place in the stack that needs real reasoning over
+    source, but the provider is not what the project is claiming — the
+    permission boundary is. Either provider works here; we use whichever key
+    is present so a missing ANTHROPIC_API_KEY does not block the pipeline.
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "OPENAI_API_KEY is not set. diagnosis.diagnose() needs either "
+            "ANTHROPIC_API_KEY or OPENAI_API_KEY; add one to your .env."
+        )
+
+    from openai import OpenAI  # imported lazily so the module imports without the SDK
+
+    client = OpenAI(api_key=api_key)
+    model = os.environ.get("OPENAI_MODEL", "gpt-4o")
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        response_format={"type": "json_object"},
+    )
+    text = response.choices[0].message.content or ""
+    if not text.strip():
+        raise DiagnosisError(f"OpenAI returned no content (model={model}).")
+    return text
+
+
+def _call_model(system_prompt: str, user_prompt: str) -> str:
+    """Dispatch to whichever provider has a key configured, Anthropic first."""
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return _call_claude(system_prompt, user_prompt)
+    if os.environ.get("OPENAI_API_KEY"):
+        return _call_openai(system_prompt, user_prompt)
+    raise RuntimeError(
+        "No model API key set. diagnosis.diagnose() needs ANTHROPIC_API_KEY or "
+        "OPENAI_API_KEY; add one to your .env."
+    )
 
 
 def _call_claude(system_prompt: str, user_prompt: str) -> str:
@@ -272,7 +339,7 @@ def diagnose(
         "Return the JSON object now."
     )
 
-    caller = _call or _call_claude
+    caller = _call or _call_model
     raw = caller(SYSTEM_PROMPT, user_prompt)
     cleaned = strip_code_fences(raw)
 
@@ -286,13 +353,17 @@ def diagnose(
     if not isinstance(parsed, dict):
         raise DiagnosisError(f"model returned {type(parsed).__name__}, expected object")
 
+    # Models frequently wrap the file body in markdown fences INSIDE the JSON
+    # string value, even when told not to. That content gets committed verbatim,
+    # so a stray fence produces a syntactically invalid source file and a red
+    # build — strip it here rather than discovering it in CI.
     proposal = {
         "bug_id": bug_id,
         "session_id": session_id,
         "description": parsed.get("description", ""),
         "target_repo": short,
         "target_path": parsed.get("target_path") or path,
-        "proposed_change": parsed.get("proposed_change", ""),
+        "proposed_change": strip_source_fences(parsed.get("proposed_change", "")),
         "proposing_agent": REPO_PROPOSING_AGENT.get(short, "agent_a"),
     }
     return validate_proposal(proposal)

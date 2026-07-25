@@ -66,8 +66,11 @@ Checklist:
 - [ ] Terminal is wide (100+ cols), font large, ANSI colour working (the DENIED
       lines are red, ALLOWED green). Test-render before the audience arrives.
 - [ ] Two browser tabs pre-opened, logged out or on a neutral profile:
-      `github.com/bryanph4m/notifications-service/commits` and
-      `.../payments-service/commits`.
+      `github.com/bryanph4m/notifications-service/branches` and
+      `.../payments-service/branches`. **Use `/branches`, not `/commits`** —
+      the demo commits land on a fresh `bug-N-fix-xxxxxx` branch, so the
+      default-branch commit list will *not* show them (verified: current
+      branches include `bug-1-fix-985084`, `bug-2-fix-8142c7`).
 
 If pre-flight passes, **do a full dry run** (`--bug 1`) before stage if there is
 time. Bug 1 and Bug 2 create a new branch each run, so re-running is safe and
@@ -96,8 +99,12 @@ Audience should be watching:
    not scripted: there is no other path forward.
 4. The green **`ALLOWED — commit authored by ...`** and the commit URL.
 
-Then switch to the GitHub tab and refresh — the commit is there, authored by
-Bob's real account.
+Then open the commit URL the script just printed (copy it, or click it if your
+terminal linkifies) — the commit is there, authored by Bob's real account.
+
+**Do not** just refresh a `/commits` tab: the commit is on the new
+`bug-1-fix-xxxxxx` branch, not on `main`, and will not appear in the
+default-branch history. The printed URL is the only reliable target.
 
 ### Bug 2 — the reverse (~45s)
 
@@ -117,9 +124,23 @@ is denied on `payments-service`; Alice commits. Say the line that matters:
 .venv\Scripts\python.exe demo.py --bug 3
 ```
 
-Audience should be watching: **two** red DENIED lines — Alice, then Bob — both
-saying branch protection on `main` refused the write. Then
-`[Agent A] Neither of us can merge to protected main. Paging on-call.`
+Audience should be watching: **two** red DENIED lines — Alice, then Bob. They
+say **different things**, and you must not misdescribe them (both verified live):
+
+```
+   DENIED — branch protection on main refused the write            <- Alice
+   DENIED — no write access (GitHub returns 404 rather than 403…)  <- Bob
+```
+
+Alice has write access to `payments-service`, so the only thing that can stop
+her is branch protection — GitHub answers `409 Changes must be made through a
+pull request`. Bob has no write access to that repo at all, so he never even
+reaches the protection rule; he gets the 404. Say it that way:
+
+> Alice is stopped by branch protection. Bob is stopped one step earlier — he
+> can't write to this repo at all. Two different refusals, neither of them ours.
+
+Then `[Agent A] Neither of us can merge to protected main. Paging on-call.`
 
 The escalation fires only *after* two observed refusals against the same
 `bug_id`. Nothing decided in advance that this change "looked structural."
@@ -223,16 +244,19 @@ and 2 generate a fresh random branch name per run, so nothing collides. Say
 
 **Wifi drops mid-demo.** Do not stand and wait.
 - Fall back to the GitHub browser tabs if they're still cached, and walk the
-  commit history: here is a commit by `ybalrs2-lab` in notifications-service,
-  here is one by `Yba1` in payments-service — two different authors, and neither
-  can commit to the other's repo.
+  `main` commit history (verified present today): `notifications-service` main
+  has a commit authored by `ybalrs2-lab`, `payments-service` main has one
+  authored by `Yba1` — two different authors, and neither can commit to the
+  other's repo.
 - Or fall back to talking over section 0 of this page. The claim is explainable
   without the terminal.
 - Do **not** claim anything ran that didn't.
 
 **"unexpected: Alice was allowed."** Collaborator permissions drifted. Skip that
 bug, run the other two, and say plainly that the repo permissions changed. Do not
-improvise an explanation.
+improvise an explanation. If this happens on **bug 3**, note that the run has
+just overwritten `payments-service/README.md` with a one-line probe file — say
+so if anyone opens the repo, and restore it after the demo.
 
 **`FAIL: Alice and Bob authenticate as the SAME GitHub user`.** The demo is not
 valid. Do not run it. This is the one condition where you stop.
