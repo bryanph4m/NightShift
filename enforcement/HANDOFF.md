@@ -45,6 +45,81 @@ protection refuses even the writer" for both repos, test each identity
 against the repo where *they* are the writer (see
 `proposal-bug3-payments-agent-b.json`), not just one repo both ways.
 
+## BLOCKING before integration: bug 3 needs proposals in BOTH directions
+
+Escalation requires **two distinct identities** to each be genuinely
+refused. A single bug-3 proposal only ever produces one refusal, because
+the responding agent is always the one that isn't proposing -- so one
+proposal means one identity attempted, and escalation will (correctly)
+decline to fire.
+
+This was caught by the rehearsal, not by reasoning: the first run paired
+two `agent_b`-proposed bug-3 fixtures, both of which resolve to alice as
+responder. Two refusals, one identity, no escalation. The trigger was
+right and the sequence was wrong, and from the outside it looked exactly
+like a broken escalation.
+
+So the orchestrator must emit bug 3 as **two** proposals under the same
+`bug_id` and `session_id`:
+
+| Proposal | Responder | Repo | Why this pairing |
+|---|---|---|---|
+| `proposing_agent: agent_a` | bob | notifications-service | bob genuinely has write here |
+| `proposing_agent: agent_b` | alice | payments-service | alice genuinely has write here |
+
+Each identity must be attempted against the repo where **it** is the real
+writer. Pair them the other way and the refusal is the mundane "you were
+never a writer here" (404, `permission_denied`) rather than "branch
+protection refuses even the writer" (409, `protected_branch`) -- still a
+real denial, but a much weaker thing to show, and it undercuts the point
+bug 3 exists to make.
+
+## Phase 2.4 escalation: Slack is not wired, by decision
+
+There is no Slack connection in this ScaleKit environment -- confirmed via
+`list_connected_accounts()`, which returns only the two GitHub accounts and
+the stray PAT below. Creating one needs a Slack app's client_id/secret plus
+a browser OAuth grant against a real workspace, so it was scoped out rather
+than faked.
+
+Escalation therefore notifies the **meeting chat and `audit_log` only**, and
+nothing anywhere reports a page as having been sent (`slack_sent: False` is
+returned explicitly). If Slack is wanted for the demo, add the connector and
+the send becomes a single call in `escalation.py`; the trigger doesn't change.
+
+Two smaller deviations, both deliberate:
+
+- **Chat attribution.** main's format attributes the escalation line to
+  Agent A, but `AGENT_A_BOT_ID` is perception's and is unset on this branch,
+  so `post_to_meeting("agent_a", ...)` raises. The escalation tries agent_a
+  first and falls back to agent_b, logging which one posted. Once perception
+  supplies Bot A's id it matches the contract with no code change. If neither
+  bot is reachable it degrades to `posted_as: None` rather than failing the
+  escalation -- seen for real in rehearsal once Bot B left the call (409).
+- **The resume path has no enum member.** `decision` is `allow|deny|escalated`
+  with no `resolved`, so a human's decision is recorded as a second
+  `escalated` row whose reason is `human resolution: <text>`, rather than
+  inventing a value on a contract this branch doesn't own. Say if you'd
+  rather add `resolved` to the enum on main.
+
+## Phase 2.5 dashboard: two contract gaps
+
+- **No latency table exists.** The build card asks for Groq latency numbers
+  on the dashboard and says perception writes them to the shared store in
+  Phase 1.6, but the schema on main defines no table for them. The dashboard
+  reads a guessed `latencies` table and degrades to a visible note when it's
+  absent. Tell me the real table and column names and it's a one-line change.
+- **Permissions are read live, per identity.** The setup panel calls
+  `GET /repos/{owner}/{repo}` through ScaleKit as each principal; that
+  endpoint's `permissions` object is scoped to the authenticated user, so the
+  matrix on screen is GitHub's answer to that principal rather than anything
+  typed in. Verified real: alice/`Yba1` write on payments + read on
+  notifications, bob/`ybalrs2-lab` the reverse. Refresh with
+  `python -m enforcement.principals`.
+
+`sessions`, `bugs`, and latency are all guarded reads, so the dashboard
+renders on a machine where only `audit_log` exists.
+
 ## Error classification, verified against real GitHub responses
 
 ScaleKit's own `http_status` / `tool_error_code` on `ScalekitToolException`
