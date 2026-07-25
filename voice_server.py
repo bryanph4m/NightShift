@@ -26,7 +26,17 @@ load_dotenv()
 PORT = int(os.environ.get("VOICE_WS_PORT", "8787"))
 TTS_MODEL = os.environ.get("OPENAI_TTS_MODEL", "tts-1")
 # 1.0 is OpenAI's default; 0.25-4.0 is the accepted range.
-TTS_SPEED = float(os.environ.get("TTS_SPEED", "0.85"))
+TTS_SPEED = float(os.environ.get("TTS_SPEED", "0.82"))
+# "auto" prefers OpenAI and falls back to the local Windows voice on any
+# failure; "openai" or "sapi" force one backend (useful for rehearsing offline).
+TTS_BACKEND = os.environ.get("TTS_BACKEND", "auto").lower()
+
+# Turn pacing. CHARS_PER_SECOND must track TTS_SPEED — it is how long we assume
+# an utterance takes, and underestimating makes the agents talk over each other.
+CHARS_PER_SECOND = float(os.environ.get("TTS_CHARS_PER_SEC", "10.9"))
+MIN_TURN_S = 3.0
+INTER_TURN_PAUSE_S = float(os.environ.get("TTS_TURN_PAUSE", "0.9"))
+HANDOFF_PAUSE_S = float(os.environ.get("TTS_HANDOFF_PAUSE", "1.6"))
 
 # Distinct voices so an audience can tell the two agents apart by ear alone.
 VOICE_FOR_AGENT = {"agent_a": "nova", "agent_b": "onyx"}
@@ -38,13 +48,30 @@ BOT_ROLE: dict[str, str] = {}
 
 
 def synthesize_pcm16_48k(text: str, voice: str) -> bytes:
-    """TTS to raw PCM16 LE at 48kHz mono, which is what sendaudio expects."""
+    """TTS to raw PCM16 LE at 48kHz mono, which is what sendaudio expects.
+
+    Tries OpenAI first for voice quality, then falls back to the Windows speech
+    engine. The fallback exists because a demo that dies on an exhausted API
+    quota is worse than one that sounds a little synthetic — and TTS quota is
+    exactly the thing that runs out mid-event.
+    """
+    if os.environ.get("OPENAI_API_KEY") and TTS_BACKEND in ("auto", "openai"):
+        try:
+            return _synthesize_openai(text, voice)
+        except Exception as exc:
+            if TTS_BACKEND == "openai":
+                raise
+            print(f"[voice] OpenAI TTS unavailable ({type(exc).__name__}), using local voice")
+    return _synthesize_sapi(text, voice)
+
+
+def _synthesize_openai(text: str, voice: str) -> bytes:
     from openai import OpenAI
 
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     # response_format="pcm" returns headerless signed 16-bit LE mono @ 24kHz.
-    # Default TTS pace is brisk for a conference call, where a listener is also
-    # reading a terminal — slowed a little so the handoff stays followable.
+    # Default pace is brisk for a conference call where the listener is also
+    # reading a terminal, so it is slowed a little.
     resp = client.audio.speech.create(
         model=TTS_MODEL,
         voice=voice,
@@ -52,8 +79,55 @@ def synthesize_pcm16_48k(text: str, voice: str) -> bytes:
         response_format="pcm",
         speed=TTS_SPEED,
     )
-    pcm_24k = resp.content
-    return _resample_to_48k(pcm_24k, 24000)
+    return _resample_to_48k(resp.content, 24000)
+
+
+# SAPI rate is -10..10 where 0 is normal; roughly maps our 0.82 speed to -2.
+_SAPI_RATE = int(round((TTS_SPEED - 1.0) * 10))
+
+
+def _synthesize_sapi(text: str, voice: str) -> bytes:
+    """Windows SAPI to 48kHz PCM16 mono, via a temp WAV we strip the header from."""
+    import tempfile
+    import wave
+
+    import win32com.client
+
+    engine = win32com.client.Dispatch("SAPI.SpVoice")
+
+    # Pick a different installed voice per agent so the two are distinguishable
+    # by ear, which is the whole point of two speakers on one call.
+    try:
+        voices = engine.GetVoices()
+        available = [voices.Item(i) for i in range(voices.Count)]
+        if available:
+            idx = 0 if voice in ("nova", "shimmer", "alloy") else len(available) - 1
+            engine.Voice = available[idx]
+    except Exception:
+        pass
+
+    engine.Rate = _SAPI_RATE
+
+    path = tempfile.mktemp(suffix=".wav")
+    stream = win32com.client.Dispatch("SAPI.SpFileStream")
+    stream.Open(path, 3)  # SSFMCreateForWrite
+    engine.AudioOutputStream = stream
+    engine.Speak(text)
+    stream.Close()
+
+    with wave.open(path, "rb") as wf:
+        rate = wf.getframerate()
+        frames = wf.readframes(wf.getnframes())
+        if wf.getnchannels() == 2:  # downmix to mono
+            samples = np.frombuffer(frames, dtype=np.int16).reshape(-1, 2)
+            frames = samples.mean(axis=1).astype(np.int16).tobytes()
+
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+    return _resample_to_48k(frames, rate)
 
 
 def _resample_to_48k(pcm_bytes: bytes, source_rate: int) -> bytes:
@@ -97,18 +171,54 @@ async def speak(bot_id: str, text: str) -> bool:
 # The handoff, spoken. Kept here rather than in a separate process because the
 # live websockets only exist inside this one — a second process importing this
 # module would see an empty CONNECTED map and never speak.
+# Roughly three minutes of spoken dialogue, paced for an audience that is also
+# watching a terminal. Every claim here is one the live run actually produces —
+# the repos, the defects, the refusal reasons and the escalation trigger all
+# match what demo.py prints, so nothing said aloud overstates the system.
 SCRIPT = [
-    ("agent_a", "C I is red on notifications service. Diagnosing now."),
-    ("agent_a", "The dispatch loop appends the subject instead of the recipient. "
-                "I have a fix, but I don't have write access to that repo. "
-                "Bob, can you take it?"),
-    ("agent_b", "Taking it. Committing as Bob now."),
-    ("agent_b", "Confirmed. The commit landed under my account."),
-    ("agent_b", "Now payments service is red. The payer balance is credited "
-                "instead of debited. I can't write there. Alice, over to you."),
-    ("agent_a", "Got it. Committed as Alice."),
-    ("agent_a", "The last fix has to land on protected main. Neither of us can "
-                "merge. Paging the on call engineer."),
+    # --- Bug 1: Alice diagnoses, is refused, hands to Bob ---
+    ("agent_a", "Heads up, Bob. C I just went red on notifications service. "
+                "I'm picking it up."),
+    ("agent_a", "Found it. In dispatch dot pie, the send loop appends the "
+                "subject instead of the recipient, so every notification is "
+                "addressed to its own subject line. One word fix. Attempting "
+                "the commit under my own credentials now."),
+    ("agent_a", "Denied. GitHub returned a four oh four, which is what it sends "
+                "for a repo you can't write to. I'm not a writer there. "
+                "Bob, it's yours."),
+    ("agent_b", "Taking it. And I'm not taking your word for it — I'll make the "
+                "real call and find out the same way you did."),
+    ("agent_b", "Allowed. Commit landed, authored by my GitHub account. Not a "
+                "shared service account — the write carries a real identity."),
+
+    # --- Bug 2: the reverse, proving it isn't a fixed role assignment ---
+    ("agent_b", "Second failure, payments service. Process payment does plus "
+                "equals where it should be minus equals — it credits the payer "
+                "instead of debiting them. A payment currently makes both sides "
+                "richer. Attempting it as myself."),
+    ("agent_b", "Denied. Same four oh four, opposite direction. Alice, over "
+                "to you."),
+    ("agent_a", "Taking it. Worth noticing: nothing in our code changed between "
+                "these two bugs. The handoff reversed because the permissions "
+                "differ, not because either of us has a fixed job."),
+    ("agent_a", "Allowed. Committed under my account."),
+
+    # --- Bug 3: both refused, escalate to a human ---
+    ("agent_a", "Third one. This fix has to land directly on main, and main is "
+                "branch protected in both repos. I'm attempting it on the repo I "
+                "do have write access to, so if it fails, it fails on the "
+                "protection rule and not a missing permission."),
+    ("agent_a", "Denied. Changes must be made through a pull request."),
+    ("agent_b", "Same here, same reason. Branch protection refused the write. "
+                "Neither of us has a path forward."),
+    ("agent_a", "Then we stop. Two genuine refusals on the same bug, under two "
+                "different identities. We're not working around that, and we're "
+                "not escalating because a change looks risky. We're escalating "
+                "because we actually ran out of authority."),
+    ("agent_a", "Paging the on call engineer now. Calling their phone."),
+    ("agent_a", "Human's been notified. We're paused until they decide. Every "
+                "attempt is in the audit log, including which identity each "
+                "call actually ran as."),
 ]
 
 _script_started = False
@@ -117,13 +227,26 @@ _script_started = False
 async def play_script() -> None:
     """Speak the handoff once, strictly one turn at a time."""
     role_to_bot = {role: bid for bid, role in BOT_ROLE.items()}
-    for role, line in SCRIPT:
+    prev_role = None
+    for idx, (role, line) in enumerate(SCRIPT):
         bot_id = role_to_bot.get(role)
         if not bot_id:
             continue
+
+        # A beat before the other agent answers reads as thinking rather than
+        # lag, and gives an audience time to look from the terminal to the call.
+        if prev_role is not None and role != prev_role:
+            await asyncio.sleep(HANDOFF_PAUSE_S)
+
         await speak(bot_id, line)
-        # Hold the floor until the utterance finishes, so turns never overlap.
-        await asyncio.sleep(max(3.0, len(line) / 13.0))
+
+        # Hold the floor for the length of the utterance so turns never overlap.
+        # CHARS_PER_SECOND is tuned to TTS_SPEED; too low and they talk over
+        # each other, which is the one failure an audience notices instantly.
+        spoken = len(line) / CHARS_PER_SECOND
+        await asyncio.sleep(max(MIN_TURN_S, spoken) + INTER_TURN_PAUSE_S)
+        prev_role = role
+        print(f"[voice] turn {idx + 1}/{len(SCRIPT)} done")
     print("[voice] script complete")
 
 
