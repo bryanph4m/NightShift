@@ -39,7 +39,11 @@ INTER_TURN_PAUSE_S = float(os.environ.get("TTS_TURN_PAUSE", "0.9"))
 HANDOFF_PAUSE_S = float(os.environ.get("TTS_HANDOFF_PAUSE", "1.6"))
 
 # Distinct voices so an audience can tell the two agents apart by ear alone.
+# Alice reads female, Bob male, matching how they are named on screen.
 VOICE_FOR_AGENT = {"agent_a": "nova", "agent_b": "onyx"}
+
+# Local Windows equivalents, matched by name. Zira is female, David is male.
+SAPI_VOICE_FOR = {"nova": "Zira", "onyx": "David"}
 
 # bot_id -> live websocket, populated as each bot completes its handshake.
 CONNECTED: dict[str, websockets.WebSocketServerProtocol] = {}
@@ -96,13 +100,22 @@ def _synthesize_sapi(text: str, voice: str) -> bytes:
     engine = win32com.client.Dispatch("SAPI.SpVoice")
 
     # Pick a different installed voice per agent so the two are distinguishable
-    # by ear, which is the whole point of two speakers on one call.
+    # by ear. Matched by name rather than list index: index order is not stable
+    # across machines, and getting it backwards makes Alice sound like Bob —
+    # which reads as "one agent talking to itself" rather than a handoff.
     try:
         voices = engine.GetVoices()
         available = [voices.Item(i) for i in range(voices.Count)]
-        if available:
-            idx = 0 if voice in ("nova", "shimmer", "alloy") else len(available) - 1
-            engine.Voice = available[idx]
+        wanted = SAPI_VOICE_FOR.get(voice, "")
+        chosen = next(
+            (v for v in available if wanted.lower() in v.GetDescription().lower()),
+            None,
+        )
+        if chosen is None and available:
+            # Fall back to opposite ends of the list so the two still differ.
+            chosen = available[0] if voice == "nova" else available[-1]
+        if chosen is not None:
+            engine.Voice = chosen
     except Exception:
         pass
 
