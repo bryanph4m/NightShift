@@ -217,7 +217,15 @@ async def play_script() -> None:
         if not bot_id:
             continue
 
-        duration = await speak(bot_id, line)
+        # A bot can hang up its control socket at any point. Let that skip one
+        # turn rather than kill the run — an exception here used to abort the
+        # whole script and leave the remaining turns unspoken.
+        try:
+            duration = await speak(bot_id, line)
+        except Exception as exc:
+            print(f"[voice] {role} turn failed ({type(exc).__name__}), skipping")
+            await asyncio.sleep(TURN_GAP_S)
+            continue
 
         # speak() streams slightly ahead of realtime, so some audio is still
         # buffered when it returns. Wait out that remainder plus a beat.
@@ -228,15 +236,65 @@ async def play_script() -> None:
     print("[voice] script complete")
 
 
+def _bot_status(bot_id: str) -> str:
+    import httpx
+
+    try:
+        resp = httpx.get(
+            f"https://api.meetstream.ai/api/v1/bots/{bot_id}/status",
+            headers={"Authorization": f"Token {os.environ['MEETSTREAM_API_KEY']}"},
+            timeout=15,
+        )
+        return resp.json().get("status", "")
+    except Exception:
+        return ""
+
+
+async def _wait_until_in_meeting(timeout_s: int = 300) -> bool:
+    """Hold until every bot reports InMeeting.
+
+    The control socket opens while a bot is still joining or waiting to be
+    admitted, so the handshake is not proof anyone can hear us. Speaking on the
+    handshake alone plays the script into an empty room.
+    """
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout_s
+    announced = False
+    while loop.time() < deadline:
+        statuses = {
+            role: await asyncio.to_thread(_bot_status, bot_id)
+            for bot_id, role in BOT_ROLE.items()
+        }
+        if statuses and all(s == "InMeeting" for s in statuses.values()):
+            print(f"[voice] all bots admitted: {statuses}")
+            return True
+        if any(s in ("Denied", "NotAllowed", "Kicked", "Failed") for s in statuses.values()):
+            print(f"[voice] a bot was refused entry: {statuses}")
+            return False
+        if not announced:
+            print(f"[voice] waiting to be admitted — {statuses}")
+            announced = True
+        await asyncio.sleep(2)
+    print("[voice] timed out waiting for admission")
+    return False
+
+
 async def _maybe_start_script() -> None:
     global _script_started
     expected = len(BOT_ROLE) or 2
     if _script_started or len(CONNECTED) < expected:
         return
     _script_started = True
-    print(f"[voice] both bots connected — speaking in 2s")
-    await asyncio.sleep(2)
-    await play_script()
+    print("[voice] both control channels open — confirming they are admitted")
+    try:
+        if not await _wait_until_in_meeting():
+            _script_started = False  # let a reconnect try again
+            return
+        await asyncio.sleep(1)
+        await play_script()
+    except Exception as exc:
+        print(f"[voice] script aborted ({type(exc).__name__}: {exc})")
+        _script_started = False
 
 
 async def handler(ws) -> None:
