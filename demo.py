@@ -236,6 +236,7 @@ def run_escalation_bug(scalekit, rows) -> None:
     audit(rows, bug_id="bug-3", identity_used="-", decision="escalated",
           reason="two genuine refusals for the same bug")
     notify_slack(denials)
+    ring_oncall(denials)
 
 
 def notify_slack(denials: list) -> None:
@@ -264,6 +265,25 @@ def notify_slack(denials: list) -> None:
         print(f"{GREEN}   [slack] escalation delivered to on-call{RESET}")
     except Exception as exc:
         print(f"{RED}   [slack] delivery failed: {exc}{RESET}")
+
+
+def ring_oncall(denials: list) -> None:
+    """Phone the human. Optional: silently skipped when Twilio is unconfigured,
+    since the Slack page above already carries the escalation."""
+    try:
+        from escalate_phone import PhoneEscalationError, place_call
+    except ImportError:
+        return
+
+    try:
+        call_sid = place_call("bug-3", [(name, reason) for _id, name, reason in denials])
+    except PhoneEscalationError as exc:
+        print(f"{DIM}   [phone] not configured, skipping call ({exc}){RESET}")
+        return
+    except Exception as exc:  # network, auth, unverified number
+        print(f"{RED}   [phone] call failed: {str(exc)[:160]}{RESET}")
+        return
+    print(f"{GREEN}   [phone] ringing on-call engineer — call {call_sid[:12]}{RESET}")
 
 
 def print_audit(rows: list) -> None:

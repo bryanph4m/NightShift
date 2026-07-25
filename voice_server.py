@@ -25,6 +25,8 @@ load_dotenv()
 
 PORT = int(os.environ.get("VOICE_WS_PORT", "8787"))
 TTS_MODEL = os.environ.get("OPENAI_TTS_MODEL", "tts-1")
+# 1.0 is OpenAI's default; 0.25-4.0 is the accepted range.
+TTS_SPEED = float(os.environ.get("TTS_SPEED", "0.85"))
 
 # Distinct voices so an audience can tell the two agents apart by ear alone.
 VOICE_FOR_AGENT = {"agent_a": "nova", "agent_b": "onyx"}
@@ -41,8 +43,14 @@ def synthesize_pcm16_48k(text: str, voice: str) -> bytes:
 
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     # response_format="pcm" returns headerless signed 16-bit LE mono @ 24kHz.
+    # Default TTS pace is brisk for a conference call, where a listener is also
+    # reading a terminal — slowed a little so the handoff stays followable.
     resp = client.audio.speech.create(
-        model=TTS_MODEL, voice=voice, input=text, response_format="pcm"
+        model=TTS_MODEL,
+        voice=voice,
+        input=text,
+        response_format="pcm",
+        speed=TTS_SPEED,
     )
     pcm_24k = resp.content
     return _resample_to_48k(pcm_24k, 24000)
