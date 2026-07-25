@@ -232,13 +232,58 @@ async def play_script() -> None:
     print("[voice] script complete")
 
 
+def _bot_status(bot_id: str) -> str:
+    """Current MeetStream status for a bot, or '' if it cannot be read."""
+    import httpx
+
+    try:
+        resp = httpx.get(
+            f"https://api.meetstream.ai/api/v1/bots/{bot_id}/status",
+            headers={"Authorization": f"Token {os.environ['MEETSTREAM_API_KEY']}"},
+            timeout=15,
+        )
+        return resp.json().get("status", "")
+    except Exception:
+        return ""
+
+
+async def _wait_until_in_meeting(timeout_s: int = 300) -> bool:
+    """Block until every bot reports InMeeting.
+
+    The control WebSocket opens while a bot is still Joining or sitting in the
+    waiting room, so the handshake is NOT proof anyone can hear us. Speaking on
+    the handshake alone plays the whole script into an empty room and looks like
+    the agents silently failed.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    announced = False
+    while asyncio.get_event_loop().time() < deadline:
+        statuses = {
+            role: await asyncio.to_thread(_bot_status, bot_id)
+            for bot_id, role in BOT_ROLE.items()
+        }
+        if all(s == "InMeeting" for s in statuses.values()) and statuses:
+            print(f"[voice] all bots in meeting: {statuses}")
+            return True
+        if not announced:
+            print(f"[voice] waiting for admission — {statuses} (admit them in the call)")
+            announced = True
+        await asyncio.sleep(4)
+    print("[voice] timed out waiting for bots to be admitted")
+    return False
+
+
 async def _maybe_start_script() -> None:
     global _script_started
     expected = len(BOT_ROLE) or 2
     if _script_started or len(CONNECTED) < expected:
         return
     _script_started = True
-    print(f"[voice] both bots connected — speaking in 2s")
+    print("[voice] both control channels open — checking they are actually admitted")
+    if not await _wait_until_in_meeting():
+        _script_started = False  # let a later reconnect retry
+        return
+    print("[voice] speaking in 2s")
     await asyncio.sleep(2)
     await play_script()
 
