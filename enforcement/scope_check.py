@@ -30,7 +30,7 @@ from enforcement.config import (
     get_scalekit_client,
 )
 from enforcement.db import get_connection, write_audit_log
-from enforcement.errors import classify_error
+from enforcement.errors import REASON_MALFORMED_PROPOSAL, classify_error
 
 REQUIRED_FIELDS = [
     "bug_id",
@@ -94,7 +94,7 @@ def process_proposal(proposal: dict) -> dict:
     if missing:
         decision = _decision(
             bug_id, "deny", None,
-            f"malformed proposal, missing required field(s): {missing}",
+            f"{REASON_MALFORMED_PROPOSAL}, missing required field(s): {missing}",
             None, "malformed_input",
         )
         return _log_and_return(
@@ -106,7 +106,7 @@ def process_proposal(proposal: dict) -> dict:
     if identifier is None:
         decision = _decision(
             bug_id, "deny", None,
-            f"unrecognized proposing_agent {proposing_agent!r}",
+            f"{REASON_MALFORMED_PROPOSAL}, unrecognized proposing_agent {proposing_agent!r}",
             None, "malformed_input",
         )
         return _log_and_return(

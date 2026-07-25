@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DATABASE_PATH)
+    conn.row_factory = sqlite3.Row
     conn.execute(SCHEMA)
     conn.commit()
     return conn

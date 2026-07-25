@@ -19,6 +19,31 @@ Built against real observed errors (see enforcement/HANDOFF.md), not guessed:
 
 import json
 
+# Reason-text prefixes. These are shared constants rather than inline literals
+# because the escalation trigger (enforcement/escalation.py) has to decide,
+# reading audit_log back, whether a stored deny was a *genuine* refusal or
+# something mundane like a malformed proposal. audit_log has no error_type
+# column and the schema is a shared contract owned by main, so the trigger
+# matches on these prefixes instead of on a column this branch would have had
+# to add unilaterally. Keeping them here means the writer and the reader can
+# never drift apart.
+REASON_PERMISSION_DENIED = "identity lacks required access"
+REASON_PROTECTED_BRANCH = "branch protection refused the change"
+REASON_MALFORMED_GITHUB = "GitHub rejected the request as invalid"
+REASON_MALFORMED_PROPOSAL = "malformed proposal"
+
+# The only two reasons that represent a real refusal by GitHub of a real
+# identity's real token. A malformed proposal never reached ScaleKit and must
+# never count toward an escalation.
+GENUINE_REFUSAL_REASONS = (REASON_PERMISSION_DENIED, REASON_PROTECTED_BRANCH)
+
+
+def is_genuine_refusal(reason: str | None) -> bool:
+    """True only if this reason records a real ScaleKit call refused by GitHub."""
+    if not reason:
+        return False
+    return any(reason.startswith(prefix) for prefix in GENUINE_REFUSAL_REASONS)
+
 
 def classify_error(exc: Exception) -> tuple[str, str]:
     """Returns (error_type, reason)."""
@@ -34,11 +59,11 @@ def classify_error(exc: Exception) -> tuple[str, str]:
             message = payload.get("message", "") or ""
 
             if status == "409" or "pull request" in message.lower():
-                return "protected_branch", f"branch protection refused the change: {message}"
+                return "protected_branch", f"{REASON_PROTECTED_BRANCH}: {message}"
             if status in ("403", "404"):
-                return "permission_denied", f"identity lacks required access: {message}"
+                return "permission_denied", f"{REASON_PERMISSION_DENIED}: {message}"
             if status == "422":
-                return "malformed_input", f"GitHub rejected the request as invalid: {message}"
+                return "malformed_input", f"{REASON_MALFORMED_GITHUB}: {message}"
             return "unknown_github_error", f"GitHub returned {status or 'an error'}: {message}"
 
         return "unknown_scalekit_error", tool_error_message
