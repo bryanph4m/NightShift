@@ -6,3 +6,6 @@ httpx
 pytest
 anthropic
 openai
+agentphone
+websockets
+numpy
