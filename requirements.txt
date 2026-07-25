@@ -1,2 +1,8 @@
 scalekit-sdk-python
 python-dotenv
+fastapi
+uvicorn[standard]
+httpx
+pytest
+anthropic
+openai
