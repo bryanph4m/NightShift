@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import statistics
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -28,6 +29,16 @@ import extraction  # noqa: E402
 
 DEFAULT_RUNS = 20
 BAR_WIDTH = 32
+
+# Pause between runs. Groq's free tier allows 8000 tokens per minute and one
+# extraction costs roughly 500, so 20 back-to-back calls trip the limit and a
+# 429 measures Groq's billing plan rather than its latency. The pause sits
+# outside the timed region, so it cannot flatter the numbers.
+PACE_S = 5.0
+
+# A rate-limited run is retried rather than scored: it says nothing about
+# whether the model returns parseable JSON, which is what this script measures.
+RATE_LIMIT_RETRIES = 3
 
 # One fixed window: Agent A diagnosing a bug it cannot fix and handing it to
 # Agent B. This is exactly the utterance shape the orchestrator must catch.
@@ -96,6 +107,8 @@ def main() -> int:
     failures: list[tuple[int, str]] = []
 
     for i in range(1, runs + 1):
+        if i > 1:
+            time.sleep(PACE_S)
         try:
             result = extraction.extract_proposal(
                 FIXTURE_SEGMENTS, session_id="verify", bug_id="bug_verify"

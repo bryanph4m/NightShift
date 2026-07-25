@@ -45,6 +45,24 @@ VALID_AGENTS = ("agent_a", "agent_b")
 
 REQUEST_TIMEOUT_S = 20.0
 
+# The SDK's default is 2 silent retries. On a live call a retry is worse than a
+# miss - the next transcript window carries the same utterance a second later -
+# and silent retries also make the measured latency a lie.
+MAX_RETRIES = 1
+
+# gpt-oss models reason before answering, and those reasoning tokens are pure
+# latency for a task this mechanical. "low" cuts the round-trip roughly in half
+# with no observed accuracy loss on the proposal/not-proposal call.
+REASONING_EFFORT = "low"
+
+# Reasoning tokens count against max_tokens. Too low and the model is cut off
+# mid-reasoning, which surfaces as a schema-validation 400 rather than as
+# truncated text - that was the single failure in the first 20-run check.
+# reasoning_effort="low" keeps the actual completion well under this; the
+# headroom only exists so a chatty reasoning trace cannot truncate the JSON.
+# Kept modest because Groq reserves max_tokens against the per-minute budget.
+MAX_TOKENS = 700
+
 # ---------------------------------------------------------------------------
 # Latency instrumentation - a dashboard reads these directly.
 # ---------------------------------------------------------------------------
@@ -282,7 +300,10 @@ def _get_client() -> Any:
     import openai  # imported lazily so the module imports without the SDK
 
     return openai.OpenAI(
-        api_key=api_key, base_url=GROQ_BASE_URL, timeout=REQUEST_TIMEOUT_S
+        api_key=api_key,
+        base_url=GROQ_BASE_URL,
+        timeout=REQUEST_TIMEOUT_S,
+        max_retries=MAX_RETRIES,
     )
 
 
@@ -292,6 +313,10 @@ def _model() -> str:
 
 def _call_groq(client: Any, model: str, user_prompt: str) -> str:
     """One Groq round-trip. Strict json_schema first, json_object as fallback.
+
+    The fallback also drops ``reasoning_effort``, which is a Groq/gpt-oss
+    extension: if we are already talking to something that rejected the strict
+    schema, it may well reject that too.
 
     Latency covers the whole path, fallback included - the caller should see
     what this tick actually cost, not a flattering subset of it.
@@ -310,7 +335,8 @@ def _call_groq(client: Any, model: str, user_prompt: str) -> str:
                     "json_schema": PROPOSAL_JSON_SCHEMA,
                 },
                 temperature=0,
-                max_tokens=300,
+                max_tokens=MAX_TOKENS,
+                reasoning_effort=REASONING_EFFORT,
             )
         except Exception:
             resp = client.chat.completions.create(
@@ -324,7 +350,7 @@ def _call_groq(client: Any, model: str, user_prompt: str) -> str:
                 ],
                 response_format={"type": "json_object"},
                 temperature=0,
-                max_tokens=300,
+                max_tokens=MAX_TOKENS,
             )
     finally:
         _record_latency((time.perf_counter() - start) * 1000.0)
