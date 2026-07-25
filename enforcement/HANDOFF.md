@@ -3,7 +3,17 @@
 Things found while doing Phase 2.1 that affect the shared contracts on `main`.
 Not committed to `main` directly -- relay and let Person 1 make the call.
 
-## Proposed contract addition: `target_branch` (optional)
+## BLOCKING before integration: `target_branch` must reach Person 1
+
+**This is not a nice-to-have note -- bug 3 does not work without it, and
+it fails silently.** If `perception`'s extraction/orchestrator builds
+proposals without this field, bug 3's proposal will look identical in
+shape to bug 1 and bug 2, the scope-check service will default to the
+feature-branch path, the commit will genuinely succeed, and the
+escalation that's supposed to be the demo's third beat simply never
+fires -- with no error anywhere to point at. This needs an explicit
+conversation with Person 1 before Phase 2.4 or integration, not just a
+read of this file.
 
 Phase 2.3's scope-check service needs this and it isn't in the proposal
 object contract on `main`. Reasoning:
