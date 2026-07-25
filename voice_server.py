@@ -26,6 +26,12 @@ load_dotenv()
 PORT = int(os.environ.get("VOICE_WS_PORT", "8787"))
 TTS_MODEL = os.environ.get("OPENAI_TTS_MODEL", "tts-1")
 
+# Audio is streamed in frames this size; one big blob buffers before it plays,
+# which is heard as a long pause then a late start.
+CHUNK_MS = int(os.environ.get("VOICE_CHUNK_MS", "200"))
+# Silence between turns, on top of the tail of the previous utterance.
+TURN_GAP_S = float(os.environ.get("VOICE_TURN_GAP", "1.0"))
+
 # Distinct voices so an audience can tell the two agents apart by ear alone.
 VOICE_FOR_AGENT = {"agent_a": "nova", "agent_b": "onyx"}
 
@@ -132,19 +138,35 @@ def build_sendaudio(bot_id: str, pcm_bytes: bytes) -> dict:
     }
 
 
-async def speak(bot_id: str, text: str) -> bool:
-    """Say `text` out loud as the given bot. Returns False if it is not connected."""
+async def speak(bot_id: str, text: str) -> float:
+    """Say `text` as the given bot. Returns the audio duration in seconds.
+
+    Streams the utterance in short frames rather than one blob: a whole
+    utterance sent at once is buffered before anything plays, which is heard as
+    a long pause and then a late start.
+    """
     ws = CONNECTED.get(bot_id)
     if ws is None:
         print(f"[voice] bot {bot_id[:8]} is not connected yet")
-        return False
+        return 0.0
 
     role = BOT_ROLE.get(bot_id, "agent_a")
     voice = VOICE_FOR_AGENT.get(role, "nova")
     pcm = await asyncio.to_thread(synthesize_pcm16_48k, text, voice)
-    await ws.send(json.dumps(build_sendaudio(bot_id, pcm)))
-    print(f"[voice] {role} spoke {len(pcm)} bytes: {text[:60]}")
-    return True
+
+    # 48kHz mono PCM16 = 96000 bytes per second of audio.
+    duration = len(pcm) / 96000.0
+    chunk = int(96000 * CHUNK_MS / 1000)
+    chunk -= chunk % 2  # never split a sample
+
+    for off in range(0, len(pcm), chunk):
+        frame = pcm[off:off + chunk]
+        await ws.send(json.dumps(build_sendaudio(bot_id, frame)))
+        # Feed slightly ahead of realtime so the bot's buffer never starves.
+        await asyncio.sleep((len(frame) / 96000.0) * 0.85)
+
+    print(f"[voice] {role} spoke {duration:.1f}s: {text[:55]}")
+    return duration
 
 
 # The handoff, spoken. Kept here rather than in a separate process because the
@@ -175,9 +197,15 @@ async def play_script() -> None:
         bot_id = role_to_bot.get(role)
         if not bot_id:
             continue
-        await speak(bot_id, line)
-        # Hold the floor until the utterance finishes, so turns never overlap.
-        await asyncio.sleep(max(3.0, len(line) / 13.0))
+
+        duration = await speak(bot_id, line)
+
+        # speak() streams slightly ahead of realtime, so some audio is still
+        # buffered when it returns. Wait out that remainder plus a beat.
+        # This used to be a characters-per-second estimate, which ran short of
+        # the real utterance and made the agents talk over each other.
+        remaining = duration * (1 - 0.85)
+        await asyncio.sleep(remaining + TURN_GAP_S)
     print("[voice] script complete")
 
 
