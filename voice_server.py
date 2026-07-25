@@ -25,25 +25,9 @@ load_dotenv()
 
 PORT = int(os.environ.get("VOICE_WS_PORT", "8787"))
 TTS_MODEL = os.environ.get("OPENAI_TTS_MODEL", "tts-1")
-# 1.0 is OpenAI's default; 0.25-4.0 is the accepted range.
-TTS_SPEED = float(os.environ.get("TTS_SPEED", "0.82"))
-# "auto" prefers OpenAI and falls back to the local Windows voice on any
-# failure; "openai" or "sapi" force one backend (useful for rehearsing offline).
-TTS_BACKEND = os.environ.get("TTS_BACKEND", "auto").lower()
-
-# Turn pacing. CHARS_PER_SECOND must track TTS_SPEED — it is how long we assume
-# an utterance takes, and underestimating makes the agents talk over each other.
-CHARS_PER_SECOND = float(os.environ.get("TTS_CHARS_PER_SEC", "10.9"))
-MIN_TURN_S = 3.0
-INTER_TURN_PAUSE_S = float(os.environ.get("TTS_TURN_PAUSE", "0.9"))
-HANDOFF_PAUSE_S = float(os.environ.get("TTS_HANDOFF_PAUSE", "1.6"))
 
 # Distinct voices so an audience can tell the two agents apart by ear alone.
-# Alice reads female, Bob male, matching how they are named on screen.
 VOICE_FOR_AGENT = {"agent_a": "nova", "agent_b": "onyx"}
-
-# Local Windows equivalents, matched by name. Zira is female, David is male.
-SAPI_VOICE_FOR = {"nova": "Zira", "onyx": "David"}
 
 # bot_id -> live websocket, populated as each bot completes its handshake.
 CONNECTED: dict[str, websockets.WebSocketServerProtocol] = {}
@@ -51,22 +35,24 @@ CONNECTED: dict[str, websockets.WebSocketServerProtocol] = {}
 BOT_ROLE: dict[str, str] = {}
 
 
+# Local Windows equivalents, matched by NAME not list index — index order is not
+# stable, and getting it backwards makes Alice sound male and Bob female, which
+# reads as one agent talking to itself instead of a handoff.
+SAPI_VOICE_FOR = {"nova": "Zira", "onyx": "David"}
+
+
 def synthesize_pcm16_48k(text: str, voice: str) -> bytes:
     """TTS to raw PCM16 LE at 48kHz mono, which is what sendaudio expects.
 
-    Tries OpenAI first for voice quality, then falls back to the Windows speech
-    engine. The fallback exists because a demo that dies on an exhausted API
-    quota is worse than one that sounds a little synthetic — and TTS quota is
-    exactly the thing that runs out mid-event.
+    OpenAI first for voice quality, local Windows voice as a fallback. The
+    fallback is load-bearing right now: the OpenAI key fails auth, so without it
+    there is no audio at all.
     """
-    if os.environ.get("OPENAI_API_KEY") and TTS_BACKEND in ("auto", "openai"):
-        try:
-            return _synthesize_openai(text, voice)
-        except Exception as exc:
-            if TTS_BACKEND == "openai":
-                raise
-            print(f"[voice] OpenAI TTS unavailable ({type(exc).__name__}), using local voice")
-    return _synthesize_sapi(text, voice)
+    try:
+        return _synthesize_openai(text, voice)
+    except Exception as exc:
+        print(f"[voice] OpenAI TTS unavailable ({type(exc).__name__}), using local voice")
+        return _synthesize_sapi(text, voice)
 
 
 def _synthesize_openai(text: str, voice: str) -> bytes:
@@ -74,56 +60,37 @@ def _synthesize_openai(text: str, voice: str) -> bytes:
 
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     # response_format="pcm" returns headerless signed 16-bit LE mono @ 24kHz.
-    # Default pace is brisk for a conference call where the listener is also
-    # reading a terminal, so it is slowed a little.
     resp = client.audio.speech.create(
-        model=TTS_MODEL,
-        voice=voice,
-        input=text,
-        response_format="pcm",
-        speed=TTS_SPEED,
+        model=TTS_MODEL, voice=voice, input=text, response_format="pcm"
     )
     return _resample_to_48k(resp.content, 24000)
 
 
-# SAPI rate is -10..10 where 0 is normal; roughly maps our 0.82 speed to -2.
-_SAPI_RATE = int(round((TTS_SPEED - 1.0) * 10))
-
-
 def _synthesize_sapi(text: str, voice: str) -> bytes:
-    """Windows SAPI to 48kHz PCM16 mono, via a temp WAV we strip the header from."""
+    """Windows SAPI to 48kHz PCM16 mono via a temp WAV."""
     import tempfile
     import wave
 
     import win32com.client
 
     engine = win32com.client.Dispatch("SAPI.SpVoice")
-
-    # Pick a different installed voice per agent so the two are distinguishable
-    # by ear. Matched by name rather than list index: index order is not stable
-    # across machines, and getting it backwards makes Alice sound like Bob —
-    # which reads as "one agent talking to itself" rather than a handoff.
     try:
         voices = engine.GetVoices()
         available = [voices.Item(i) for i in range(voices.Count)]
         wanted = SAPI_VOICE_FOR.get(voice, "")
         chosen = next(
-            (v for v in available if wanted.lower() in v.GetDescription().lower()),
-            None,
+            (v for v in available if wanted.lower() in v.GetDescription().lower()), None
         )
         if chosen is None and available:
-            # Fall back to opposite ends of the list so the two still differ.
             chosen = available[0] if voice == "nova" else available[-1]
         if chosen is not None:
             engine.Voice = chosen
     except Exception:
         pass
 
-    engine.Rate = _SAPI_RATE
-
     path = tempfile.mktemp(suffix=".wav")
     stream = win32com.client.Dispatch("SAPI.SpFileStream")
-    stream.Open(path, 3)  # SSFMCreateForWrite
+    stream.Open(path, 3)
     engine.AudioOutputStream = stream
     engine.Speak(text)
     stream.Close()
@@ -131,10 +98,9 @@ def _synthesize_sapi(text: str, voice: str) -> bytes:
     with wave.open(path, "rb") as wf:
         rate = wf.getframerate()
         frames = wf.readframes(wf.getnframes())
-        if wf.getnchannels() == 2:  # downmix to mono
-            samples = np.frombuffer(frames, dtype=np.int16).reshape(-1, 2)
-            frames = samples.mean(axis=1).astype(np.int16).tobytes()
-
+        if wf.getnchannels() == 2:
+            s = np.frombuffer(frames, dtype=np.int16).reshape(-1, 2)
+            frames = s.mean(axis=1).astype(np.int16).tobytes()
     try:
         os.remove(path)
     except OSError:
@@ -184,10 +150,6 @@ async def speak(bot_id: str, text: str) -> bool:
 # The handoff, spoken. Kept here rather than in a separate process because the
 # live websockets only exist inside this one — a second process importing this
 # module would see an empty CONNECTED map and never speak.
-# Roughly three minutes of spoken dialogue, paced for an audience that is also
-# watching a terminal. Every claim here is one the live run actually produces —
-# the repos, the defects, the refusal reasons and the escalation trigger all
-# match what demo.py prints, so nothing said aloud overstates the system.
 SCRIPT = [
     ("agent_a", "Bob, we have a problem. C I just went red on notifications "
                 "service. Diagnosing now."),
@@ -209,68 +171,14 @@ _script_started = False
 async def play_script() -> None:
     """Speak the handoff once, strictly one turn at a time."""
     role_to_bot = {role: bid for bid, role in BOT_ROLE.items()}
-    prev_role = None
-    for idx, (role, line) in enumerate(SCRIPT):
+    for role, line in SCRIPT:
         bot_id = role_to_bot.get(role)
         if not bot_id:
             continue
-
-        # A beat before the other agent answers reads as thinking rather than
-        # lag, and gives an audience time to look from the terminal to the call.
-        if prev_role is not None and role != prev_role:
-            await asyncio.sleep(HANDOFF_PAUSE_S)
-
         await speak(bot_id, line)
-
-        # Hold the floor for the length of the utterance so turns never overlap.
-        # CHARS_PER_SECOND is tuned to TTS_SPEED; too low and they talk over
-        # each other, which is the one failure an audience notices instantly.
-        spoken = len(line) / CHARS_PER_SECOND
-        await asyncio.sleep(max(MIN_TURN_S, spoken) + INTER_TURN_PAUSE_S)
-        prev_role = role
-        print(f"[voice] turn {idx + 1}/{len(SCRIPT)} done")
+        # Hold the floor until the utterance finishes, so turns never overlap.
+        await asyncio.sleep(max(3.0, len(line) / 13.0))
     print("[voice] script complete")
-
-
-def _bot_status(bot_id: str) -> str:
-    """Current MeetStream status for a bot, or '' if it cannot be read."""
-    import httpx
-
-    try:
-        resp = httpx.get(
-            f"https://api.meetstream.ai/api/v1/bots/{bot_id}/status",
-            headers={"Authorization": f"Token {os.environ['MEETSTREAM_API_KEY']}"},
-            timeout=15,
-        )
-        return resp.json().get("status", "")
-    except Exception:
-        return ""
-
-
-async def _wait_until_in_meeting(timeout_s: int = 300) -> bool:
-    """Block until every bot reports InMeeting.
-
-    The control WebSocket opens while a bot is still Joining or sitting in the
-    waiting room, so the handshake is NOT proof anyone can hear us. Speaking on
-    the handshake alone plays the whole script into an empty room and looks like
-    the agents silently failed.
-    """
-    deadline = asyncio.get_event_loop().time() + timeout_s
-    announced = False
-    while asyncio.get_event_loop().time() < deadline:
-        statuses = {
-            role: await asyncio.to_thread(_bot_status, bot_id)
-            for bot_id, role in BOT_ROLE.items()
-        }
-        if all(s == "InMeeting" for s in statuses.values()) and statuses:
-            print(f"[voice] all bots in meeting: {statuses}")
-            return True
-        if not announced:
-            print(f"[voice] waiting for admission — {statuses} (admit them in the call)")
-            announced = True
-        await asyncio.sleep(4)
-    print("[voice] timed out waiting for bots to be admitted")
-    return False
 
 
 async def _maybe_start_script() -> None:
@@ -279,11 +187,7 @@ async def _maybe_start_script() -> None:
     if _script_started or len(CONNECTED) < expected:
         return
     _script_started = True
-    print("[voice] both control channels open — checking they are actually admitted")
-    if not await _wait_until_in_meeting():
-        _script_started = False  # let a later reconnect retry
-        return
-    print("[voice] speaking in 2s")
+    print(f"[voice] both bots connected — speaking in 2s")
     await asyncio.sleep(2)
     await play_script()
 
