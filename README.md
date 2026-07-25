@@ -349,7 +349,7 @@ Points the build cards left to be settled jointly. Settled here; both branches f
 
 | Decision | Resolution |
 |---|---|
-| ScaleKit env var naming | **`SCALEKIT_ENVIRONMENT_URL`.** ScaleKit's own Python SDK samples use this form (`ScalekitClient(environment_url=...)`). Older samples using `SCALEKIT_ENV_URL` refer to the same value — do not use that spelling here. |
+| ScaleKit env var naming | **`SCALEKIT_ENVIRONMENT_URL`** for our own `.env` — that naming choice stands. But the installed SDK's actual constructor (`scalekit-sdk-python` 2.15.0, verified via `inspect.signature`) takes the keyword argument **`env_url`**, not `environment_url` as earlier written here. Pass `ScalekitClient(env_url=os.environ["SCALEKIT_ENVIRONMENT_URL"], ...)` — the env var name and the constructor kwarg name are different strings, don't conflate them. |
 | `proposed_change` format | **Full replacement file contents,** not a unified diff. Simpler to apply through `github_file_create_update` and it cannot fail on a fuzzy patch. |
 | Bot B join signal | **`perception` writes the `sessions` row; `enforcement` polls for it** and dispatches Bot B. No cross-branch HTTP endpoint, so neither side needs the other running in order to develop. |
 | Agent-to-agent channel | **Open — resolve at the Phase 2.2 sync.** See the flag below; this is the highest-priority integration question in the build. |
@@ -474,7 +474,7 @@ from scalekit import ScalekitClient
 import os
 
 scalekit = ScalekitClient(
-    environment_url=os.getenv("SCALEKIT_ENVIRONMENT_URL"),
+    env_url=os.getenv("SCALEKIT_ENVIRONMENT_URL"),
     client_id=os.getenv("SCALEKIT_CLIENT_ID"),
     client_secret=os.getenv("SCALEKIT_CLIENT_SECRET"),
 )
@@ -494,18 +494,23 @@ if response.connected_account.status != "ACTIVE":
 
 Repeat with `identifier="bob"`, signed in as Bob. **Use a separate browser profile or a private window for the second flow** — completing both while signed in as the same GitHub user is the easiest way to silently end up with two identical principals.
 
-5. **Verify the two principals differ.** This is a mandatory sync point for both workstreams, and nothing downstream is real until it passes:
+5. **Verify the two principals differ.** This is a mandatory sync point for both workstreams, and nothing downstream is real until it passes.
+
+   **`list_scoped_tools` alone does NOT prove this** — tested against a live environment and confirmed a false positive. It reflects the GitHub connector's static tool catalog (which API operations exist), not the connected user's actual repo permissions, so two genuinely different GitHub accounts return the identical list of tool *names*. (Also note the real return shape is a `(response, call)` tuple, not a bare response, and `tool.definition` is a protobuf Struct — `t.tool.definition.name` raises `AttributeError`; use `google.protobuf.json_format.MessageToDict(t.tool.definition)["name"]` instead.)
+
+   The reliable check is calling a tool and reading back who GitHub says you are:
 
 ```python
 for who in ("alice", "bob"):
-    tools = scalekit.tools.list_scoped_tools(
+    result = scalekit.actions.execute_tool(
+        tool_name="github_user_get_authenticated",
         identifier=who,
-        filter={"connection_names": ["github"]},
+        tool_input={},
     )
-    print(who, [t.tool.definition.name for t in tools.tools])
+    print(who, "->", result.data.get("login"))
 ```
 
-Print both and read them side by side. If they are identical, the OAuth flows were completed as the same user — redo step 4 before going further.
+Print both logins and read them side by side. If they match, the OAuth flows were completed as the same user — redo step 4 before going further.
 
 > Note that `list_scoped_tools` lives on `scalekit.tools`, while `get_or_create_connected_account`, `get_authorization_link`, and `execute_tool` live on `scalekit.actions`.
 
