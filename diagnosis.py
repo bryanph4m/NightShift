@@ -34,16 +34,25 @@ load_dotenv()
 
 DEFAULT_MODEL = "claude-sonnet-5"
 
-# Which ScaleKit identity can actually *read* each repo. Alice cannot see
-# notifications-service at all (GitHub returns 404), Bob cannot see
-# payments-service, so the reader identity has to match the repo.
+# NOTE FOR ANYONE AUDITING THIS FILE: neither map below is a permission check,
+# and nothing here decides whether a write is allowed. Diagnosis only reads
+# source and drafts a proposal. Every allow/deny in this project comes from a
+# real execute_tool call under the acting identity (see scope_check_stub.py and
+# demo.py) — these maps cannot and do not short-circuit that.
+
+# Whose credentials to READ the source with. A read needs an identity that can
+# see the repo, and GitHub answers 404 rather than 403 for repos an account
+# cannot access, so we read with the identity that has access. This has no
+# bearing on who is permitted to write.
 REPO_READER_IDENTITY = {
     "notifications-service": "bob",
     "payments-service": "alice",
 }
 
-# Which agent proposes for a given repo. The proposing agent is the one that
-# CANNOT write there - that is the whole point of the handoff.
+# Which agent SPEAKS FIRST about a failure in a given repo — purely a
+# turn-taking assignment so the two agents do not both open on the same bug.
+# It is not a claim about who can write there; the agent that speaks first
+# still attempts its own fix and finds out from GitHub like everyone else.
 REPO_PROPOSING_AGENT = {
     "notifications-service": "agent_a",
     "payments-service": "agent_b",

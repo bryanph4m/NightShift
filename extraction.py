@@ -311,12 +311,44 @@ def _model() -> str:
     return os.environ.get("GROQ_MODEL", DEFAULT_MODEL)
 
 
+# Failures that the json_object fallback cannot possibly fix. Retrying these
+# with a second full request just burns the 8000 tokens/minute free-tier budget
+# at exactly the moment it is already exhausted, and doubles the measured
+# latency of the tick. Let them propagate instead.
+_NON_SCHEMA_ERROR_MARKERS = (
+    "rate_limit",
+    "rate limit",
+    "429",
+    "too many requests",
+    "timeout",
+    "timed out",
+    "connection",
+    "authentication",
+    "invalid_api_key",
+    "401",
+    "403",
+    "insufficient_quota",
+)
+
+
+def _should_try_fallback(exc: Exception) -> bool:
+    """True only when the error plausibly came from the strict-schema request.
+
+    A model/endpoint that rejects ``json_schema`` or ``reasoning_effort`` is
+    worth one retry in plain json_object mode. A 429, a timeout, or bad
+    credentials is not - the second call fails the same way.
+    """
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return not any(marker in text for marker in _NON_SCHEMA_ERROR_MARKERS)
+
+
 def _call_groq(client: Any, model: str, user_prompt: str) -> str:
     """One Groq round-trip. Strict json_schema first, json_object as fallback.
 
     The fallback also drops ``reasoning_effort``, which is a Groq/gpt-oss
     extension: if we are already talking to something that rejected the strict
-    schema, it may well reject that too.
+    schema, it may well reject that too. It fires only for errors a plain
+    json_object retry could actually fix - see ``_should_try_fallback``.
 
     Latency covers the whole path, fallback included - the caller should see
     what this tick actually cost, not a flattering subset of it.
@@ -338,7 +370,9 @@ def _call_groq(client: Any, model: str, user_prompt: str) -> str:
                 max_tokens=MAX_TOKENS,
                 reasoning_effort=REASONING_EFFORT,
             )
-        except Exception:
+        except Exception as exc:
+            if not _should_try_fallback(exc):
+                raise
             resp = client.chat.completions.create(
                 model=model,
                 messages=[

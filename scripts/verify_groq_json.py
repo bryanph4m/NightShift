@@ -103,20 +103,31 @@ def main() -> int:
     extraction.reset_latency_stats()
 
     proposals = 0
+    throttled = 0
     latencies: list[float] = []
     failures: list[tuple[int, str]] = []
 
     for i in range(1, runs + 1):
         if i > 1:
             time.sleep(PACE_S)
-        try:
-            result = extraction.extract_proposal(
-                FIXTURE_SEGMENTS, session_id="verify", bug_id="bug_verify"
-            )
-            error = None
-        except Exception as exc:  # network blips, rate limits, auth
-            result = None
-            error = f"{type(exc).__name__}: {exc}"
+
+        # Retry past rate limits without scoring them: a 429 is a quota fact,
+        # not a statement about whether the model returns parseable JSON.
+        for attempt in range(RATE_LIMIT_RETRIES + 1):
+            try:
+                result = extraction.extract_proposal(
+                    FIXTURE_SEGMENTS, session_id="verify", bug_id="bug_verify"
+                )
+                error = None
+            except Exception as exc:  # network blips, rate limits, auth
+                result = None
+                error = f"{type(exc).__name__}: {exc}"
+
+            if error and "rate_limit" in error and attempt < RATE_LIMIT_RETRIES:
+                throttled += 1
+                time.sleep(PACE_S * (attempt + 2))
+                continue
+            break
 
         ms = extraction.get_last_latency_ms()
         if ms is not None:
@@ -146,6 +157,8 @@ def main() -> int:
     pct = (proposals / runs * 100) if runs else 0.0
     print(f"  valid proposal extracted : {proposals}/{runs}  ({pct:.0f}%)")
     print(f"  failed / no proposal     : {runs - proposals}/{runs}")
+    if throttled:
+        print(f"  rate-limited and retried : {throttled}  (not scored)")
 
     if latencies:
         ordered = sorted(latencies)

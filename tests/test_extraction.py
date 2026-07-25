@@ -298,6 +298,44 @@ def test_falls_back_to_json_object_mode_when_schema_rejected():
     assert "ONLY raw JSON" in system_msg
 
 
+class _RateLimited(FakeCompletions):
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        raise RuntimeError(
+            "Error code: 429 - rate_limit_exceeded: tokens per minute (TPM)"
+        )
+
+
+def test_rate_limit_does_not_trigger_a_second_request():
+    """A 429 must propagate, not be retried in json_object mode.
+
+    The free tier is 8000 tokens/minute; a fallback request fired on a 429
+    burns the budget again at the moment it is already gone, and fails
+    identically.
+    """
+    completions = _RateLimited([])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    with pytest.raises(RuntimeError, match="429"):
+        extraction.extract_proposal(SEGMENTS, client=client)
+    assert len(completions.calls) == 1
+    # Latency of the failed tick is still recorded.
+    assert extraction.get_last_latency_ms() is not None
+
+
+@pytest.mark.parametrize(
+    "message,expect_fallback",
+    [
+        ("json_schema not supported by this model", True),
+        ("Unrecognized request argument: reasoning_effort", True),
+        ("Error code: 429 - rate_limit_exceeded", False),
+        ("Request timed out", False),
+        ("Error code: 401 - invalid_api_key", False),
+    ],
+)
+def test_should_try_fallback_classification(message, expect_fallback):
+    assert extraction._should_try_fallback(RuntimeError(message)) is expect_fallback
+
+
 # ---------------------------------------------------------------------------
 # latency instrumentation
 # ---------------------------------------------------------------------------
